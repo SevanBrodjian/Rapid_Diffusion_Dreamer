@@ -33,10 +33,9 @@ while True:
         start_time = time.time()
         encoded_dream_sample = encoded_samples1[0] + diff_vec * i
         dream_sample, dream_gen_time = decode_imgs(model, encoded_dream_sample.unsqueeze(0), options)
-        dream = torch.cat(dream_sample, dim=0).to(torch.float32)
-        dream = dream.squeeze().float().cpu().clamp_(0, 1).numpy()
-        dream = np.transpose(dream, (1, 2, 0))
-        dream = (dream * 255.0).round()
+        dream = dream_sample[0][0]
+        dream = (dream * 255).to(torch.uint8)
+        dream = dream.permute(1, 2, 0).cpu().numpy()
 
         image_bgr = cv2.cvtColor(dream.astype(np.uint8), cv2.COLOR_RGB2BGR)
         cv2.imshow('Image', image_bgr)

@@ -30,7 +30,7 @@ encoded_samples2, sample_enc_time = encode_samples(model, ucs, cs, options)
 
 dream_steps = 35
 diff_vec = (encoded_samples2[0] - encoded_samples1[0]) / dream_steps
-all_encoded_samples = [encoded_samples1[0] + diff_vec * i for i in range(75)]
+all_encoded_samples = [encoded_samples1[0] + diff_vec * i for i in range(dream_steps)]
 all_encoded_samples = torch.cat(all_encoded_samples, dim=0)
 
 
@@ -127,32 +127,14 @@ def dream_loop(all_encoded_samples, frame_buffer, buffer_lock, clean_freq = 4):
             processing_times.append(end_process - start_process)
             frame_times.append(end_frame - start_frame)
 
-        for i in range(dream_steps-1, 1, -1):
-            start_frame = time.time()
-            start_dreaming = time.time()
-            dream = decode_dream(model, all_encoded_samples[i:i+1])
-            end_dreaming = time.time()
-
-            start_process = time.time()
-            frames = interpolate_frames_linear(prev_dream, dream)
-            prev_dream = dream
-            frames = frames.byte().permute(0, 2, 3, 1).to('cpu', non_blocking=False).numpy()
-            frames = resize_images_parallel(frames, (3840, 2160))
-            frames = [convert_array_to_qimage(frame) for frame in frames]
-            with buffer_lock:
-                frame_buffer.extend(frames)
-            end_process = time.time()
-
-            start_cleaning = time.time()
-            if i % clean_freq == 0:
-                torch.cuda.empty_cache()
-            end_cleaning = time.time()
-            end_frame = time.time()
-
-            dream_times.append(end_dreaming - start_dreaming)
-            cleaning_times.append(end_cleaning - start_cleaning)
-            processing_times.append(end_process - start_process)
-            frame_times.append(end_frame - start_frame)
+        cur_latent = all_encoded_samples[-1].unsqueeze(0)
+        shape = cur_latent.shape
+        std_dev = np.random.randint(1, 4)
+        random_latent = torch.randn(shape, dtype=torch.float32) * std_dev + 0.1
+        random_latent = random_latent.to(options['device'])
+        diff_vec = (random_latent - cur_latent) / dream_steps
+        all_encoded_samples = [cur_latent + diff_vec * i for i in range(dream_steps)]
+        all_encoded_samples = torch.cat(all_encoded_samples, dim=0)
         
         print(f'Average dream time: {sum(dream_times) / len(dream_times)}')
         print(f'Average processing time: {sum(processing_times) / len(processing_times)}')
@@ -160,7 +142,7 @@ def dream_loop(all_encoded_samples, frame_buffer, buffer_lock, clean_freq = 4):
         print(f'Average time per frame: {sum(frame_times) / len(frame_times)}')
 
 
-def display_frames(display_widget, frame_buffer, buffer_lock, display_rate = 30):
+def display_frames(display_widget, frame_buffer, buffer_lock, display_rate = 26):
     while True:
         frame = None
         with buffer_lock:

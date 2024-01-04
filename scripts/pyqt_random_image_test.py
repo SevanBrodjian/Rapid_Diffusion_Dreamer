@@ -7,7 +7,7 @@ import threading
 import torch
 import concurrent.futures
 from PIL import Image
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout, QSlider, QPushButton
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
 
@@ -33,6 +33,10 @@ diff_vec = (encoded_samples2[0] - encoded_samples1[0]) / dream_steps
 all_encoded_samples = [encoded_samples1[0] + diff_vec * i for i in range(dream_steps)]
 all_encoded_samples = torch.cat(all_encoded_samples, dim=0)
 
+slider_values = {'latent_mean': 0., 'latent_var': 1.}
+slider_lock = threading.Lock()
+buffer_lock = threading.Lock()
+frame_buffer = []
 
 class ImageDisplay(QWidget):
     update_image = pyqtSignal(QImage)
@@ -40,15 +44,51 @@ class ImageDisplay(QWidget):
     def __init__(self):
         super().__init__()
         self.image_label = QLabel(self)
+
+        self.latent_mean = QSlider(Qt.Horizontal, self)
+        self.latent_mean.setMinimum(-100)
+        self.latent_mean.setMaximum(100)
+        self.latent_mean.setValue(0)
+        self.latent_mean.valueChanged.connect(self.slider_changed)
+        self.label_mean = QLabel("0.50", self)
+
+        self.latent_var = QSlider(Qt.Horizontal, self)
+        self.latent_var.setMinimum(-100)
+        self.latent_var.setMaximum(100)
+        self.latent_var.setValue(1)
+        self.latent_var.valueChanged.connect(self.slider_changed)
+        self.label_var = QLabel("0.50", self)
+
+        self.button = QPushButton("Clear Frame Buffer", self)
+        self.button.clicked.connect(self.onButtonClicked)
+
         layout = QVBoxLayout()
         layout.addWidget(self.image_label)
+        layout.addWidget(self.latent_mean)
+        layout.addWidget(self.latent_var)
         self.setLayout(layout)
+
         self.update_image.connect(self.setImage)
 
     @pyqtSlot(QImage)
     def setImage(self, image):
         pixmap = QPixmap.fromImage(image)
         self.image_label.setPixmap(pixmap)
+
+    def slider_changed(self, value):
+        global slider_values
+        with slider_lock:
+            slider_values['latent_mean'] = self.latent_mean.value()
+            slider_values['latent_var'] = self.latent_var.value()
+
+            self.label_mean.setText(f"Mean: {self.latent_mean.value() / 10.:.2f}")
+            self.label_var.setText(f"Variance: {self.latent_var.value():.2f}")
+
+    def onButtonClicked(self):
+        global buffer_lock
+        global frame_buffer
+        with buffer_lock:
+            frame_buffer = frame_buffer[-10:]
 
 
 def convert_array_to_qimage(array):
@@ -92,7 +132,11 @@ def interpolate_frames_linear(prev_frame, frame, num_inter=3):
     return output
 
 
-def dream_loop(all_encoded_samples, frame_buffer, buffer_lock, clean_freq = 4):
+def dream_loop(all_encoded_samples, clean_freq = 4):
+    global buffer_lock
+    global frame_buffer
+    global slider_values
+
     dream_times = list()
     frame_times = list()
     processing_times = list()
@@ -127,10 +171,13 @@ def dream_loop(all_encoded_samples, frame_buffer, buffer_lock, clean_freq = 4):
             processing_times.append(end_process - start_process)
             frame_times.append(end_frame - start_frame)
 
+        with slider_lock:
+            current_slider_mean = float(slider_values['latent_mean'])
+            current_slider_var = float(slider_values['latent_var'])
         cur_latent = all_encoded_samples[-1].unsqueeze(0)
         shape = cur_latent.shape
-        std_dev = np.random.randint(1, 4)
-        random_latent = torch.randn(shape, dtype=torch.float32) * std_dev + 0.1
+        # std_dev = np.random.randint(4, 5)
+        random_latent = torch.randn(shape, dtype=torch.float32) * 0.1 #+ current_slider_mean / 10.
         random_latent = random_latent.to(options['device'])
         diff_vec = (random_latent - cur_latent) / dream_steps
         all_encoded_samples = [cur_latent + diff_vec * i for i in range(dream_steps)]
@@ -142,7 +189,10 @@ def dream_loop(all_encoded_samples, frame_buffer, buffer_lock, clean_freq = 4):
         print(f'Average time per frame: {sum(frame_times) / len(frame_times)}')
 
 
-def display_frames(display_widget, frame_buffer, buffer_lock, display_rate = 26):
+def display_frames(display_widget, display_rate = 26):
+    global buffer_lock
+    global frame_buffer
+
     while True:
         frame = None
         with buffer_lock:
@@ -166,13 +216,10 @@ def start_gui_and_processing():
     display_widget = ImageDisplay()
     display_widget.show()
 
-    frame_buffer = []
-    buffer_lock = threading.Lock()
-
-    dream_thread = threading.Thread(target=dream_loop, args=(all_encoded_samples, frame_buffer, buffer_lock))
+    dream_thread = threading.Thread(target=dream_loop, args=(all_encoded_samples,))
     dream_thread.start()
 
-    display_thread = threading.Thread(target=display_frames, args=(display_widget, frame_buffer, buffer_lock))
+    display_thread = threading.Thread(target=display_frames, args=(display_widget,))
     display_thread.start()
 
     sys.exit(app.exec_())

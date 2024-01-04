@@ -28,7 +28,7 @@ encoded_samples1, sample_enc_time = encode_samples(model, ucs, cs, options)
 ucs, cs, text_enc_time = encode_text(model, prompt2, options)
 encoded_samples2, sample_enc_time = encode_samples(model, ucs, cs, options)
 
-dream_steps = 35
+dream_steps = 20
 diff_vec = (encoded_samples2[0] - encoded_samples1[0]) / dream_steps
 all_encoded_samples = [encoded_samples1[0] + diff_vec * i for i in range(75)]
 all_encoded_samples = torch.cat(all_encoded_samples, dim=0)
